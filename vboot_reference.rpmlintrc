@@ -1,0 +1,2 @@
+# It's just a pkgconfig file, no real devel stuff here
+addFilter("E: devel-file-in-non-devel-package")

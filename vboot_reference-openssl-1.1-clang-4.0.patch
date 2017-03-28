@@ -1,0 +1,225 @@
+commit ad9ba0ea32f92cc37a21b8c3c45e08408af1a4b7
+Author: Bernhard Rosenkraenzer <Bernhard.Rosenkranzer@linaro.org>
+Date:   Tue Mar 28 16:20:04 2017 +0200
+
+    Fix build on modern Linux systems
+    
+    Fixes various new compiler warnings in clang 4.0 and gcc 7, as well as
+    compatibility with OpenSSL 1.1 libraries
+    
+    Change-Id: I6dcfdb73e7e1fa376481539db698b60a71f2f361
+    Signed-off-by: Bernhard Rosenkraenzer <Bernhard.Rosenkranzer@linaro.org>
+
+diff --git a/Makefile b/Makefile
+index 31f714b8..b679393e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1277,7 +1277,7 @@ ${BUILD}/utility/bmpblk_font: ${BUILD}/utility/image_types.o
+ ALL_OBJS += ${BUILD}/utility/image_types.o
+ 
+ # Allow multiple definitions, so tests can mock functions from other libraries
+-${BUILD}/tests/%: CFLAGS += -Xlinker --allow-multiple-definition
++${BUILD}/tests/%: LDFLAGS += -Xlinker --allow-multiple-definition
+ ${BUILD}/tests/%: LDLIBS += -lrt -luuid
+ ${BUILD}/tests/%: LIBS += ${TESTLIB}
+ 
+diff --git a/firmware/2lib/include/2struct.h b/firmware/2lib/include/2struct.h
+index 0d1c6ec3..8c298177 100644
+--- a/firmware/2lib/include/2struct.h
++++ b/firmware/2lib/include/2struct.h
+@@ -202,7 +202,7 @@ struct vb2_shared_data {
+ 	uint32_t workbuf_kernel_key_offset;
+ 	uint32_t workbuf_kernel_key_size;
+ 
+-} __attribute__((packed));
++} __attribute__((packed, aligned(__alignof__(uint32_t))));
+ 
+ /****************************************************************************/
+ 
+diff --git a/firmware/include/vboot_struct.h b/firmware/include/vboot_struct.h
+index 6be7256a..1333d470 100644
+--- a/firmware/include/vboot_struct.h
++++ b/firmware/include/vboot_struct.h
+@@ -469,7 +469,7 @@ typedef struct VbSharedDataHeader {
+ 	 * all the fields it knows about are present.  Newer firmware needs to
+ 	 * use reasonable defaults when accessing older structs.
+ 	 */
+-} __attribute__((packed)) VbSharedDataHeader;
++} __attribute__((packed,aligned(__alignof__(uint32_t)))) VbSharedDataHeader;
+ 
+ /*
+  * Size of VbSharedDataheader for each version
+diff --git a/firmware/lib/vboot_api_kernel.c b/firmware/lib/vboot_api_kernel.c
+index d1afc4f7..97143ae2 100644
+--- a/firmware/lib/vboot_api_kernel.c
++++ b/firmware/lib/vboot_api_kernel.c
+@@ -509,7 +509,7 @@ VbError_t VbVerifyMemoryBootImage(VbCommonParams *cparams,
+ 	dev_switch = shared->flags & VBSD_BOOT_DEV_SWITCH_ON;
+ 
+ 	VbNvLoad();
+-	VbNvGet(&vnc, VB2_NV_DEV_BOOT_FASTBOOT_FULL_CAP,
++	VbNvGet(&vnc, (enum VbNvParam)VB2_NV_DEV_BOOT_FASTBOOT_FULL_CAP,
+ 		&allow_fastboot_full_cap);
+ 
+ 	if (0 == allow_fastboot_full_cap) {
+diff --git a/firmware/lib/vboot_ui_menu.c b/firmware/lib/vboot_ui_menu.c
+index 2e4975f1..55f788f1 100644
+--- a/firmware/lib/vboot_ui_menu.c
++++ b/firmware/lib/vboot_ui_menu.c
+@@ -388,13 +388,13 @@ VbError_t vb2_update_menu()
+ 		case VB_WARN_OPTIONS:
+ 			switch(default_boot) {
+ 			case VBNV_DEV_DEFAULT_BOOT_DISK:
+-				next_menu_idx = VB_DEV_DISK;
++				next_menu_idx = (VB_MENU)VB_DEV_DISK;
+ 				break;
+ 			case VBNV_DEV_DEFAULT_BOOT_USB:
+-				next_menu_idx = VB_DEV_USB;
++				next_menu_idx = (VB_MENU)VB_DEV_USB;
+ 				break;
+ 			case VBNV_DEV_DEFAULT_BOOT_LEGACY:
+-				next_menu_idx = VB_DEV_LEGACY;
++				next_menu_idx = (VB_MENU)VB_DEV_LEGACY;
+ 				break;
+ 			}
+ 
+diff --git a/futility/cmd_create.c b/futility/cmd_create.c
+index 1efa23d9..c2a42caa 100644
+--- a/futility/cmd_create.c
++++ b/futility/cmd_create.c
+@@ -196,7 +196,9 @@ static int vb2_make_keypair()
+ 		goto done;
+ 	}
+ 	/* Public keys doesn't have the private exponent */
+-	has_priv = !!rsa_key->d;
++	const BIGNUM *d;
++	RSA_get0_key(rsa_key, NULL, NULL, &d);
++	has_priv = !!d;
+ 	if (!has_priv)
+ 		fprintf(stderr, "%s has a public key only.\n", infile);
+ 
+diff --git a/futility/vb2_helper.c b/futility/vb2_helper.c
+index 6f36af78..5381847f 100644
+--- a/futility/vb2_helper.c
++++ b/futility/vb2_helper.c
+@@ -204,6 +204,7 @@ enum futil_file_type ft_recognize_pem(uint8_t *buf, uint32_t len)
+ int ft_show_pem(const char *name, uint8_t *buf, uint32_t len, void *data)
+ {
+ 	RSA *rsa_key;
++	const BIGNUM *n, *d;
+ 	uint8_t *keyb;
+ 	uint8_t digest[VB2_SHA1_DIGEST_SIZE];
+ 	uint32_t keyb_len;
+@@ -214,11 +215,13 @@ int ft_show_pem(const char *name, uint8_t *buf, uint32_t len, void *data)
+ 	if (!rsa_key)
+ 		DIE;
+ 
++	RSA_get0_key(rsa_key, &n, NULL, &d);
++
+ 	/* Use to presence of the private exponent to decide if it's public */
+-	printf("%s Key file:      %s\n", rsa_key->d ? "Private" : "Public",
++	printf("%s Key file:      %s\n", d ? "Private" : "Public",
+ 					 name);
+ 
+-	bits = BN_num_bits(rsa_key->n);
++	bits = BN_num_bits(n);
+ 	printf("  Key length:          %d\n", bits);
+ 
+ 	if (vb_keyb_from_rsa(rsa_key, &keyb, &keyb_len)) {
+diff --git a/host/lib/util_misc.c b/host/lib/util_misc.c
+index 95acecb9..ad7d5f6a 100644
+--- a/host/lib/util_misc.c
++++ b/host/lib/util_misc.c
+@@ -73,6 +73,7 @@ int vb_keyb_from_rsa(struct rsa_st *rsa_private_key,
+ 	BIGNUM *N0inv = NULL, *R = NULL, *RR = NULL;
+ 	BIGNUM *RRTemp = NULL, *NnumBits = NULL;
+ 	BIGNUM *n = NULL, *rr = NULL;
++	const BIGNUM *rn;
+ 	BN_CTX *bn_ctx = BN_CTX_new();
+ 	uint32_t n0invout;
+ 	uint32_t bufsize;
+@@ -80,7 +81,8 @@ int vb_keyb_from_rsa(struct rsa_st *rsa_private_key,
+ 	int retval = 1;
+ 
+ 	/* Size of RSA key in 32-bit words */
+-	nwords = BN_num_bits(rsa_private_key->n) / 32;
++	RSA_get0_key(rsa_private_key, &rn, NULL, NULL);
++	nwords = BN_num_bits(rn) / 32;
+ 
+ 	bufsize = (2 + nwords + nwords) * sizeof(uint32_t);
+ 	outbuf = malloc(bufsize);
+@@ -109,7 +111,7 @@ int vb_keyb_from_rsa(struct rsa_st *rsa_private_key,
+ 	NEW_BIGNUM(B);
+ #undef NEW_BIGNUM
+ 
+-	BN_copy(N, rsa_private_key->n);
++	BN_copy(N, rn);
+ 	BN_set_word(Big1, 1L);
+ 	BN_set_word(Big2, 2L);
+ 	BN_set_word(Big32, 32L);
+diff --git a/host/lib21/host_key.c b/host/lib21/host_key.c
+index 4f82d10c..9b9bdf34 100644
+--- a/host/lib21/host_key.c
++++ b/host/lib21/host_key.c
+@@ -565,8 +565,10 @@ int vb2_public_key_hash(struct vb2_public_key *key,
+ 
+ enum vb2_signature_algorithm vb2_rsa_sig_alg(struct rsa_st *rsa)
+ {
+-	int exp = BN_get_word(rsa->e);
+-	int bits = BN_num_bits(rsa->n);
++	const BIGNUM *e, *n;
++	RSA_get0_key(rsa, &n, &e, NULL);
++	int exp = BN_get_word(e);
++	int bits = BN_num_bits(n);
+ 
+ 	switch (exp) {
+ 	case RSA_3:
+diff --git a/utility/dumpRSAPublicKey.c b/utility/dumpRSAPublicKey.c
+index 26724d6e..035a4e73 100644
+--- a/utility/dumpRSAPublicKey.c
++++ b/utility/dumpRSAPublicKey.c
+@@ -20,8 +20,10 @@
+  */
+ 
+ int check(RSA* key) {
+-  int public_exponent = BN_get_word(key->e);
+-  int modulus = BN_num_bits(key->n);
++  const BIGNUM *n, *e;
++  RSA_get0_key(key, &n, &e, NULL);
++  int public_exponent = BN_get_word(e);
++  int modulus = BN_num_bits(n);
+ 
+   if (public_exponent != 3 && public_exponent != 65537) {
+     fprintf(stderr,
+@@ -41,7 +43,9 @@ int check(RSA* key) {
+  */
+ void output(RSA* key) {
+   int i, nwords;
+-  BIGNUM *N = key->n;
++  const BIGNUM *kn;
++  RSA_get0_key(key, &kn, NULL, NULL);
++  BIGNUM *N = (BIGNUM*)kn;
+   BIGNUM *Big1 = NULL, *Big2 = NULL, *Big32 = NULL, *BigMinus1 = NULL;
+   BIGNUM *B = NULL;
+   BIGNUM *N0inv= NULL, *R = NULL, *RR = NULL, *RRTemp = NULL, *NnumBits = NULL;
+@@ -49,7 +53,6 @@ void output(RSA* key) {
+   BN_CTX *bn_ctx = BN_CTX_new();
+   uint32_t n0invout;
+ 
+-  N = key->n;
+   /* Output size of RSA key in 32-bit words */
+   nwords = BN_num_bits(N) / 32;
+   if (-1 == write(1, &nwords, sizeof(nwords)))
+diff --git a/utility/load_kernel_test.c b/utility/load_kernel_test.c
+index 769c24c5..6a15c69e 100644
+--- a/utility/load_kernel_test.c
++++ b/utility/load_kernel_test.c
+@@ -85,7 +85,7 @@ VbError_t VbExDiskWrite(VbExDiskHandle_t handle, uint64_t lba_start,
+ int main(int argc, char* argv[]) {
+ 
+   const char* image_name;
+-  uint64_t key_size;
++  uint64_t key_size = 0;
+   uint8_t* key_blob = NULL;
+   VbSharedDataHeader* shared;
+   GoogleBinaryBlockHeader* gbb;
