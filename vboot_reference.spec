@@ -2,7 +2,7 @@
 
 Name: vboot_reference
 Version: 0.2017.03.28
-Release: 1
+Release: 2
 # From https://chromium.googlesource.com/chromiumos/platform/vboot_reference
 Source0: %{name}-%{version}.tar.xz
 Source1000: vboot_reference.rpmlintrc
