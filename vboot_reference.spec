@@ -21,7 +21,7 @@ You may need these tools to install OpenMandriva Lx on a Chromebook.
 
 %prep
 %setup -q
-%apply_patches
+%autopatch -p1
 
 %build
 %make LIBDIR=%{_lib}
