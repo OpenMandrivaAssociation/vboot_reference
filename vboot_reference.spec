@@ -9,7 +9,7 @@ Source1000: vboot_reference.rpmlintrc
 # https://chromium-review.googlesource.com/461901
 Patch0: vboot_reference/vboot_reference-openssl-1.1-clang-4.0.patch
 Summary: Tools for working with ChromiumOS's vboot bootloader
-URL: http://chromium.googlesource.com/chromiumos
+URL: https://chromium.googlesource.com/chromiumos
 License: BSD
 Group: System/Base
 BuildRequires: pkgconfig(openssl)
