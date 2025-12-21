@@ -12,6 +12,7 @@ Summary: Tools for working with ChromiumOS's vboot bootloader
 URL: https://chromium.googlesource.com/chromiumos
 License: BSD
 Group: System/Base
+BuildRequires:	make
 BuildRequires: pkgconfig(openssl)
 
 %description
